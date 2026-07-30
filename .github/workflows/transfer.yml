@@ -1,1 +1,52 @@
+name: Bulk Transfer Archive Videos to Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_list:
+        description: 'Paste direct MP4 URLs (one per line). Format: URL|filename.mp4'
+        required: true
+        type: string
+      release_tag:
+        description: 'Release Tag (e.g., v1.0)'
+        required: true
+        default: 'v1.0'
+
+jobs:
+  bulk-transfer:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Process and Download All Videos
+        run: |
+          mkdir -p downloads
+          echo "${{ github.event.inputs.file_list }}" | while IFS= read -r line; do
+            # Skip empty lines
+            [ -z "$line" ] && continue
+            
+            # Extract URL and optional custom filename (split by '|')
+            URL=$(echo "$line" | cut -d'|' -f1 | xargs)
+            FILENAME=$(echo "$line" | cut -d'|' -f2 -s | xargs)
+            
+            # If no custom name was provided, extract the original filename
+            if [ -z "$FILENAME" ]; then
+              FILENAME=$(basename "$URL" | cut -d'?' -f1)
+            fi
+            
+            echo "Downloading $URL as $FILENAME..."
+            curl -L "$URL" -o "downloads/$FILENAME"
+          done
+
+      - name: Upload All MP4s to GitHub Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: "downloads/*"
+          tag: ${{ github.event.inputs.release_tag }}
+          overwrite: true
+          file_glob: true
 
