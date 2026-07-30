@@ -32,7 +32,7 @@ jobs:
             URL=$(echo "$line" | cut -d'|' -f1 | xargs)
             FILENAME=$(echo "$line" | cut -d'|' -f2 -s | xargs)
             
-            # If no custom name was provided, extract the original filename
+            # If no custom name was provided, extract original filename from URL
             if [ -z "$FILENAME" ]; then
               FILENAME=$(basename "$URL" | cut -d'?' -f1)
             fi
@@ -42,11 +42,9 @@ jobs:
           done
 
       - name: Upload All MP4s to GitHub Release
-        uses: svenstaro/upload-release-action@v2
+        uses: softprops/action-gh-release@v2
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: "downloads/*"
-          tag: ${{ github.event.inputs.release_tag }}
-          overwrite: true
-          file_glob: true
-
+          files: "downloads/*"
+          tag_name: ${{ github.event.inputs.release_tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
