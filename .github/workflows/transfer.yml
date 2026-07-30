@@ -7,10 +7,6 @@ on:
         description: 'Target Release Tag (e.g., v1.0.0)'
         required: true
         default: 'v1.0.0'
-      urls_list:
-        description: 'Paste your URL | Filename lines here'
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -45,17 +41,19 @@ jobs:
       - name: Download, Upload, and Clean Up Loop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          URLS_DATA: ${{ inputs.urls_list }}
         run: |
           TAG="${{ inputs.release_tag }}"
           
-          # Write input to a temp file to preserve newline breaks
-          printf "%s\n" "$URLS_DATA" > input_urls.txt
+          if [ ! -f "urls.txt" ]; then
+            echo "Error: urls.txt file not found!"
+            exit 1
+          fi
           
           while IFS= read -r line || [ -n "$line" ]; do
-            # Clean carriage returns and skip empty lines
+            # Remove carriage returns and skip empty lines or comments
             line=$(echo "$line" | tr -d '\r')
             [ -z "$line" ] && continue
+            [[ "$line" =~ ^# ]] && continue
             
             # Split line by pipe (|)
             URL=$(echo "$line" | awk -F'|' '{print $1}' | xargs)
@@ -74,12 +72,10 @@ jobs:
                   echo "Failed to upload $FILENAME to Release"
                 fi
                 
-                # Clean up local file immediately
+                # Clean up local file immediately to maintain disk space
                 rm -f "$FILENAME"
               else
                 echo "Failed to download from $URL"
               fi
             fi
-          done < input_urls.txt
-          
-          rm -f input_urls.txt
+          done < urls.txt
