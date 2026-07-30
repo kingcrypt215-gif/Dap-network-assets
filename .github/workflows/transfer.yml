@@ -12,24 +12,26 @@ on:
         required: true
         type: string
 
+# Grant explicit permissions to create releases and upload files
+permissions:
+  contents: write
+
 jobs:
   bulk-transfer:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Free Disk Space on Runner
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: false
-          swap-storage: true
-
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Free Disk Space
+        run: |
+          echo "Clearing unwanted tool packages to free disk space..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          echo "Disk space freed successfully."
 
       - name: Ensure Release Exists
         env:
@@ -63,17 +65,18 @@ jobs:
               echo "Downloading from: $URL"
               
               # Download file with cURL
-              curl -L -s -o "$FILENAME" "$URL"
-              
-              if [ -f "$FILENAME" ]; then
+              if curl -L -s --fail -o "$FILENAME" "$URL"; then
                 echo "Uploading $FILENAME to Release $TAG..."
-                gh release upload "$TAG" "$FILENAME" --clobber
+                if gh release upload "$TAG" "$FILENAME" --clobber; then
+                  echo "Successfully uploaded $FILENAME"
+                else
+                  echo "Failed to upload $FILENAME to Release"
+                fi
                 
-                # Immediately delete to free up disk space for the next file
+                # Clean up local file immediately
                 rm -f "$FILENAME"
-                echo "Successfully uploaded and cleaned up $FILENAME"
               else
-                echo "Failed to download $URL"
+                echo "Failed to download from $URL"
               fi
             fi
           done
