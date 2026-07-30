@@ -12,7 +12,6 @@ on:
         required: true
         type: string
 
-# Grant explicit permissions to create releases and upload files
 permissions:
   contents: write
 
@@ -50,9 +49,12 @@ jobs:
         run: |
           TAG="${{ inputs.release_tag }}"
           
-          # Read inputs line by line
-          echo "$URLS_DATA" | while IFS= read -r line || [ -n "$line" ]; do
-            # Skip empty lines
+          # Write input to a temp file to preserve newline breaks
+          printf "%s\n" "$URLS_DATA" > input_urls.txt
+          
+          while IFS= read -r line || [ -n "$line" ]; do
+            # Clean carriage returns and skip empty lines
+            line=$(echo "$line" | tr -d '\r')
             [ -z "$line" ] && continue
             
             # Split line by pipe (|)
@@ -64,8 +66,7 @@ jobs:
               echo "Processing: $FILENAME"
               echo "Downloading from: $URL"
               
-              # Download file with cURL
-              if curl -L -s --fail -o "$FILENAME" "$URL"; then
+              if curl -L --fail -o "$FILENAME" "$URL"; then
                 echo "Uploading $FILENAME to Release $TAG..."
                 if gh release upload "$TAG" "$FILENAME" --clobber; then
                   echo "Successfully uploaded $FILENAME"
@@ -79,4 +80,6 @@ jobs:
                 echo "Failed to download from $URL"
               fi
             fi
-          done
+          done < input_urls.txt
+          
+          rm -f input_urls.txt
