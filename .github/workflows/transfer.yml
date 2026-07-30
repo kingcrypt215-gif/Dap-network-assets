@@ -3,48 +3,77 @@ name: Bulk Transfer Archive Videos to Release
 on:
   workflow_dispatch:
     inputs:
-      file_list:
-        description: 'Paste direct MP4 URLs (one per line). Format: URL|filename.mp4'
+      release_tag:
+        description: 'Target Release Tag (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+      urls_list:
+        description: 'Paste your URL | Filename lines here'
         required: true
         type: string
-      release_tag:
-        description: 'Release Tag (e.g., v1.0)'
-        required: true
-        default: 'v1.0'
 
 jobs:
   bulk-transfer:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    
     steps:
-      - name: Checkout Code
+      - name: Free Disk Space on Runner
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Process and Download All Videos
+      - name: Ensure Release Exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p downloads
-          echo "${{ github.event.inputs.file_list }}" | while IFS= read -r line; do
+          TAG="${{ inputs.release_tag }}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG does not exist. Creating it..."
+            gh release create "$TAG" --title "Release $TAG" --notes "Automated video asset release."
+          fi
+
+      - name: Download, Upload, and Clean Up Loop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          URLS_DATA: ${{ inputs.urls_list }}
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          
+          # Read inputs line by line
+          echo "$URLS_DATA" | while IFS= read -r line || [ -n "$line" ]; do
             # Skip empty lines
             [ -z "$line" ] && continue
             
-            # Extract URL and optional custom filename (split by '|')
-            URL=$(echo "$line" | cut -d'|' -f1 | xargs)
-            FILENAME=$(echo "$line" | cut -d'|' -f2 -s | xargs)
+            # Split line by pipe (|)
+            URL=$(echo "$line" | awk -F'|' '{print $1}' | xargs)
+            FILENAME=$(echo "$line" | awk -F'|' '{print $2}' | xargs)
             
-            # If no custom name was provided, extract original filename from URL
-            if [ -z "$FILENAME" ]; then
-              FILENAME=$(basename "$URL" | cut -d'?' -f1)
+            if [ -n "$URL" ] && [ -n "$FILENAME" ]; then
+              echo "--------------------------------------------------"
+              echo "Processing: $FILENAME"
+              echo "Downloading from: $URL"
+              
+              # Download file with cURL
+              curl -L -s -o "$FILENAME" "$URL"
+              
+              if [ -f "$FILENAME" ]; then
+                echo "Uploading $FILENAME to Release $TAG..."
+                gh release upload "$TAG" "$FILENAME" --clobber
+                
+                # Immediately delete to free up disk space for the next file
+                rm -f "$FILENAME"
+                echo "Successfully uploaded and cleaned up $FILENAME"
+              else
+                echo "Failed to download $URL"
+              fi
             fi
-            
-            echo "Downloading $URL as $FILENAME..."
-            curl -L "$URL" -o "downloads/$FILENAME"
           done
-
-      - name: Upload All MP4s to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: "downloads/*"
-          tag_name: ${{ github.event.inputs.release_tag }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
