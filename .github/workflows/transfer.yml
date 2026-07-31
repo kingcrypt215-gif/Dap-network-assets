@@ -14,7 +14,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl xargs
+          sudo apt-get install -y ffmpeg curl
 
       - name: Download, Transcode to HLS, and Upload Assets
         run: |
@@ -80,7 +80,7 @@ jobs:
               -hls_list_size 0 \
               -f hls "$folder_name/index.m3u8"
 
-            # Delete source video immediately to free up runner disk
+            # Delete original download immediately to save runner disk space
             rm -f input_temp_file
 
             cd "$folder_name"
@@ -95,12 +95,12 @@ jobs:
             gh release upload v1.0.0 index.m3u8 --clobber || true
 
             echo "Uploading video segments in safe batches..."
-            # Process chunks 40 at a time to prevent command-line overflow & bypass file size limits
+            # xargs works natively on Linux without needing apt-get
             find . -maxdepth 1 -name "*.ts" | xargs -n 40 gh release upload v1.0.0 --clobber
 
             cd ..
 
-            # Cleanup local runner directory
+            # Cleanup local runner working directory
             rm -rf "$folder_name"
             echo "Finished processing $filename cleanly."
 
