@@ -1,21 +1,3 @@
-name: Process and Upload Media Assets
-
-on:
-  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
-
-jobs:
-  build-and-upload:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg curl
-
       - name: Download, Transcode to HLS, and Upload Assets
         run: |
           # Ensure urls.txt exists
@@ -33,8 +15,13 @@ jobs:
             # Skip empty lines or comments
             [ -z "$url" ] || [[ "$url" =~ ^# ]] && continue
 
+            # Fallback if filename is missing after pipe
+            if [ -z "$filename" ]; then
+              filename="media_asset_$(date +%s).mp4"
+            fi
+
             echo "=================================================="
-            echo "Processing: $filename"
+            echo "Processing File: $filename"
             echo "URL: $url"
             echo "=================================================="
 
@@ -49,6 +36,11 @@ jobs:
 
             # 2. Create target directory for HLS output
             folder_name="${filename%.mp4}"
+            # Extra check to guarantee folder_name is never empty
+            if [ -z "$folder_name" ]; then
+              folder_name="output_stream"
+            fi
+
             mkdir -p "$folder_name"
 
             # 3. Probe codecs for smart transcoding
