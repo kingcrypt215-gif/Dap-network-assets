@@ -14,7 +14,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl
+          sudo apt-get install -y ffmpeg curl zip
 
       - name: Download, Transcode to HLS, and Upload Assets
         run: |
@@ -72,7 +72,7 @@ jobs:
                 A_FLAG="-c:a aac -b:a 128k"
             fi
 
-            # Slice into 6-second HLS chunks to reduce total chunk count
+            # Generate HLS playlist and chunks (6-second duration)
             ffmpeg -i "input_temp_file" \
               $V_FLAG $A_FLAG \
               -start_number 0 \
@@ -89,12 +89,21 @@ jobs:
             sed -i "s/index/${folder_name}_index/g" index.m3u8
             cd ..
 
-            echo "Uploading stream assets to GitHub Release..."
-            # Upload folder contents in a single command pass
-            gh release upload v1.0.0 $folder_name/* --clobber
+            # Compress folder into max 1GB split archives to guarantee safe upload sizes
+            echo "Packaging HLS files into sub-1GB zip volumes..."
+            zip -r -s 1000m "${folder_name}_hls.zip" "$folder_name"
 
-            # Cleanup runner disk
-            rm -rf input_temp_file "$folder_name"
+            echo "Uploading zip volume(s) to GitHub Release..."
+            # Upload any generated zip files (.zip, .z01, .z02, etc.)
+            for archive in "${folder_name}_hls".*; do
+              if [ -f "$archive" ]; then
+                echo "Uploading $archive..."
+                gh release upload v1.0.0 "$archive" --clobber
+              fi
+            done
+
+            # Cleanup runner disk space
+            rm -rf input_temp_file "$folder_name" "${folder_name}_hls"*
             echo "Finished processing $filename cleanly."
 
           done < urls.txt
