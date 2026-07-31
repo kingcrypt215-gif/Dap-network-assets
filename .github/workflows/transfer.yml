@@ -16,7 +16,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg curl
 
-      - name: Download, Transcode to HLS, and Upload Assets
+      - name: Download, Transcode to HLS, and Create Dedicated Release
         run: |
           if [ ! -f urls.txt ]; then
             echo "Error: urls.txt file not found!"
@@ -45,34 +45,29 @@ jobs:
               continue
             fi
 
-            folder_name="${filename%.mp4}"
-            if [ -z "$folder_name" ]; then
-              folder_name="output_stream"
-            fi
+            # Clean name for Release Tag (e.g., mars_needs_moms_2011)
+            raw_tag="${filename%.mp4}"
+            tag_name=$(echo "$raw_tag" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_')
 
+            folder_name="stream_output"
             mkdir -p "$folder_name"
 
             V_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 input_temp_file || echo "unknown")
             A_CODEC=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 input_temp_file || echo "unknown")
 
-            echo "Detected Video Codec: $V_CODEC"
-            echo "Detected Audio Codec: $A_CODEC"
-
             if [ "$V_CODEC" = "h264" ]; then
                 V_FLAG="-c:v copy"
             else
-                echo "Non-standard video codec detected. Re-encoding to H.264..."
                 V_FLAG="-c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p"
             fi
 
             if [ "$A_CODEC" = "aac" ]; then
                 A_FLAG="-c:a copy"
             else
-                echo "Non-standard audio codec detected. Re-encoding to AAC..."
                 A_FLAG="-c:a aac -b:a 128k"
             fi
 
-            # Generate HLS segments (6-second duration)
+            # Generate standard HLS stream layout
             ffmpeg -i "input_temp_file" \
               $V_FLAG $A_FLAG \
               -start_number 0 \
@@ -80,29 +75,24 @@ jobs:
               -hls_list_size 0 \
               -f hls "$folder_name/index.m3u8"
 
-            # Delete original download immediately to save runner disk space
             rm -f input_temp_file
 
+            # Create or ensure the dedicated release tag exists
+            echo "Creating GitHub Release Tag: $tag_name..."
+            gh release create "$tag_name" --title "$raw_tag" --notes "HLS Stream Assets" || true
+
             cd "$folder_name"
-            for file in index*.ts; do
-              if [ -f "$file" ]; then
-                mv "$file" "${folder_name}_${file}"
-              fi
-            done
-            sed -i "s/index/${folder_name}_index/g" index.m3u8
 
             echo "Uploading playlist file..."
-            gh release upload v1.0.0 index.m3u8 --clobber || true
+            gh release upload "$tag_name" index.m3u8 --clobber
 
             echo "Uploading video segments in safe batches..."
-            # xargs works natively on Linux without needing apt-get
-            find . -maxdepth 1 -name "*.ts" | xargs -n 40 gh release upload v1.0.0 --clobber
+            find . -maxdepth 1 -name "*.ts" | xargs -n 40 gh release upload "$tag_name" --clobber
 
             cd ..
 
-            # Cleanup local runner working directory
             rm -rf "$folder_name"
-            echo "Finished processing $filename cleanly."
+            echo "Finished processing $filename cleanly into Release: $tag_name"
 
           done < urls.txt
         env:
