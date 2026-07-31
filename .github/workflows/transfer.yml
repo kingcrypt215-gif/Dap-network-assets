@@ -19,38 +19,31 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Read urls.txt line by line
           while IFS='|' read -r url output_name; do
-            # Trim whitespace
             url=$(echo "$url" | xargs)
             output_name=$(echo "$output_name" | xargs)
             
             if [ -z "$url" ]; then
               continue
-            ]
+            fi
 
             echo "================================================="
             echo "Processing File: $output_name"
             echo "URL: $url"
             echo "================================================="
 
-            # Download source video safely
             curl -L -o input_temp.mp4 "$url"
 
-            # Check if download succeeded
             if [ ! -f input_temp.mp4 ] || [ ! -s input_temp.mp4 ]; then
               echo "Error: Download failed or empty file."
               exit 1
             fi
 
-            # Create clean folder name without extension
             base_name="${output_name%.*}"
             mkdir -p "$base_name"
 
-            # Transcode video to HLS (.m3u8 and .ts segments)
             ffmpeg -i input_temp.mp4 -codec:v libx264 -codec:a aac -hls_time 10 -hls_playlist_type vod -hls_segment_filename "$base_name/index_%03d.ts" "$base_name/index.m3u8"
 
-            # Create Tag Name for Release
             TAG_NAME="${base_name}_release"
             echo "Creating GitHub Release Tag: $TAG_NAME..."
             
@@ -63,11 +56,9 @@ jobs:
             echo "Uploading video segments in safe batches..."
             for file in "$base_name"/*.ts; do
               gh release upload "$TAG_NAME" "$file" --clobber
-              # Pause for 2 seconds between each file to prevent HTTP 403 Rate Limit errors
               sleep 2
             done
 
-            # Clean up temp file for next loop iteration
             rm -f input_temp.mp4
 
           done < urls.txt
