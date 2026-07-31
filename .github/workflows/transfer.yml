@@ -6,7 +6,6 @@ on:
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -17,87 +16,58 @@ jobs:
           sudo apt-get install -y ffmpeg curl
 
       - name: Download, Transcode to HLS, and Create Dedicated Release
-        run: |
-          if [ ! -f urls.txt ]; then
-            echo "Error: urls.txt file not found!"
-            exit 1
-          fi
-
-          while IFS='|' read -r raw_url raw_filename || [ -n "$raw_url" ]; do
-            url=$(echo "$raw_url" | xargs)
-            filename=$(echo "$raw_filename" | xargs)
-
-            [ -z "$url" ] || [[ "$url" =~ ^# ]] && continue
-
-            if [ -z "$filename" ]; then
-              filename="media_asset_$(date +%s).mp4"
-            fi
-
-            echo "=================================================="
-            echo "Processing File: $filename"
-            echo "URL: $url"
-            echo "=================================================="
-
-            curl -L -s "$url" -o "input_temp_file"
-
-            if [ ! -f "input_temp_file" ]; then
-              echo "Failed to download $filename. Skipping..."
-              continue
-            fi
-
-            # Generate clean release tag slug (e.g. mars_needs_moms_2011)
-            raw_tag="${filename%.mp4}"
-            tag_name=$(echo "$raw_tag" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_')
-
-            folder_name="stream_output"
-            mkdir -p "$folder_name"
-
-            V_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 input_temp_file || echo "unknown")
-            A_CODEC=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 input_temp_file || echo "unknown")
-
-            if [ "$V_CODEC" = "h264" ]; then
-                V_FLAG="-c:v copy"
-            else
-                V_FLAG="-c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p"
-            fi
-
-            if [ "$A_CODEC" = "aac" ]; then
-                A_FLAG="-c:a copy"
-            else
-                A_FLAG="-c:a aac -b:a 128k"
-            fi
-
-            # Base download path for GitHub Release raw asset redirect matching
-            BASE_URL="https://github.com/${{ github.repository }}/releases/download/${tag_name}"
-
-            # Generate HLS playlist prepending absolute release URLs for each chunk
-            ffmpeg -i "input_temp_file" \
-              $V_FLAG $A_FLAG \
-              -start_number 0 \
-              -hls_time 6 \
-              -hls_list_size 0 \
-              -hls_base_url "${BASE_URL}/" \
-              -f hls "$folder_name/index.m3u8"
-
-            rm -f input_temp_file
-
-            # Create the dedicated release tag on GitHub
-            echo "Creating GitHub Release Tag: $tag_name..."
-            gh release create "$tag_name" --title "$raw_tag" --notes "HLS Stream Assets" || true
-
-            cd "$folder_name"
-
-            echo "Uploading playlist file..."
-            gh release upload "$tag_name" index.m3u8 --clobber
-
-            echo "Uploading video segments in safe batches..."
-            find . -maxdepth 1 -name "*.ts" | xargs -n 40 gh release upload "$tag_name" --clobber
-
-            cd ..
-
-            rm -rf "$folder_name"
-            echo "Finished processing $filename cleanly into Release: $tag_name"
-
-          done < urls.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. Read urls.txt line by line
+          while IFS='|' read -r url output_name; do
+            # Trim whitespace
+            url=$(echo "$url" | xargs)
+            output_name=$(echo "$output_name" | xargs)
+            
+            if [ -z "$url" ]; then
+              continue
+            ]
+
+            echo "================================================="
+            echo "Processing File: $output_name"
+            echo "URL: $url"
+            echo "================================================="
+
+            # Download source video safely
+            curl -L -o input_temp.mp4 "$url"
+
+            # Check if download succeeded
+            if [ ! -f input_temp.mp4 ] || [ ! -s input_temp.mp4 ]; then
+              echo "Error: Download failed or empty file."
+              exit 1
+            fi
+
+            # Create clean folder name without extension
+            base_name="${output_name%.*}"
+            mkdir -p "$base_name"
+
+            # Transcode video to HLS (.m3u8 and .ts segments)
+            ffmpeg -i input_temp.mp4 -codec:v libx264 -codec:a aac -hls_time 10 -hls_playlist_type vod -hls_segment_filename "$base_name/index_%03d.ts" "$base_name/index.m3u8"
+
+            # Create Tag Name for Release
+            TAG_NAME="${base_name}_release"
+            echo "Creating GitHub Release Tag: $TAG_NAME..."
+            
+            gh release create "$TAG_NAME" --title "Release: $base_name" --notes "Automated HLS transcode release for $base_name" || true
+
+            echo "Uploading playlist file..."
+            gh release upload "$TAG_NAME" "$base_name/index.m3u8" --clobber
+            sleep 1
+
+            echo "Uploading video segments in safe batches..."
+            for file in "$base_name"/*.ts; do
+              gh release upload "$TAG_NAME" "$file" --clobber
+              # Pause for 2 seconds between each file to prevent HTTP 403 Rate Limit errors
+              sleep 2
+            done
+
+            # Clean up temp file for next loop iteration
+            rm -f input_temp.mp4
+
+          done < urls.txt
