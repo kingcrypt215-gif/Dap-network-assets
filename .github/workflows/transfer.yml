@@ -1,81 +1,106 @@
-name: Bulk Transfer Archive Videos to Release
+name: Process and Upload Media Assets
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 'Target Release Tag (e.g., v1.0.0)'
-        required: true
-        default: 'v1.0.0'
-
-permissions:
-  contents: write
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
 
 jobs:
-  bulk-transfer:
+  build-and-upload:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Free Disk Space
+      - name: Install Dependencies
         run: |
-          echo "Clearing unwanted tool packages to free disk space..."
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
-          echo "Disk space freed successfully."
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg curl
 
-      - name: Ensure Release Exists
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download, Transcode to HLS, and Upload Assets
         run: |
-          TAG="${{ inputs.release_tag }}"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG does not exist. Creating it..."
-            gh release create "$TAG" --title "Release $TAG" --notes "Automated video asset release."
-          fi
-
-      - name: Download, Upload, and Clean Up Loop
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ inputs.release_tag }}"
-          
-          if [ ! -f "urls.txt" ]; then
+          # Ensure urls.txt exists
+          if [ ! -f urls.txt ]; then
             echo "Error: urls.txt file not found!"
             exit 1
           fi
-          
-          while IFS= read -r line || [ -n "$line" ]; do
-            # Remove carriage returns and skip empty lines or comments
-            line=$(echo "$line" | tr -d '\r')
-            [ -z "$line" ] && continue
-            [[ "$line" =~ ^# ]] && continue
-            
-            # Split line by pipe (|)
-            URL=$(echo "$line" | awk -F'|' '{print $1}' | xargs)
-            FILENAME=$(echo "$line" | awk -F'|' '{print $2}' | xargs)
-            
-            if [ -n "$URL" ] && [ -n "$FILENAME" ]; then
-              echo "--------------------------------------------------"
-              echo "Processing: $FILENAME"
-              echo "Downloading from: $URL"
-              
-              if curl -L --fail -o "$FILENAME" "$URL"; then
-                echo "Uploading $FILENAME to Release $TAG..."
-                if gh release upload "$TAG" "$FILENAME" --clobber; then
-                  echo "Successfully uploaded $FILENAME"
-                else
-                  echo "Failed to upload $FILENAME to Release"
-                fi
-                
-                # Clean up local file immediately to maintain disk space
-                rm -f "$FILENAME"
-              else
-                echo "Failed to download from $URL"
-              fi
+
+          # Loop through each line in urls.txt (Format: URL | Output_Filename.mp4)
+          while IFS='|' read -r raw_url raw_filename || [ -n "$raw_url" ]; do
+            # Trim whitespace from variables
+            url=$(echo "$raw_url" | xargs)
+            filename=$(echo "$raw_filename" | xargs)
+
+            # Skip empty lines or comments
+            [ -z "$url" ] || [[ "$url" =~ ^# ]] && continue
+
+            echo "=================================================="
+            echo "Processing: $filename"
+            echo "URL: $url"
+            echo "=================================================="
+
+            # 1. Download raw video file
+            curl -L -s "$url" -o "input_temp_file"
+
+            # Check if download succeeded
+            if [ ! -f "input_temp_file" ]; then
+              echo "Failed to download $filename. Skipping..."
+              continue
             fi
+
+            # 2. Create target directory for HLS output
+            folder_name="${filename%.mp4}"
+            mkdir -p "$folder_name"
+
+            # 3. Probe codecs for smart transcoding
+            V_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 input_temp_file || echo "unknown")
+            A_CODEC=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 input_temp_file || echo "unknown")
+
+            echo "Detected Video Codec: $V_CODEC"
+            echo "Detected Audio Codec: $A_CODEC"
+
+            # Determine Video Flag (Copy vs Transcode)
+            if [ "$V_CODEC" = "h264" ]; then
+                V_FLAG="-c:v copy"
+            else
+                echo "Non-standard video codec detected. Re-encoding to H.264..."
+                V_FLAG="-c:v libx264 -preset fast -crf 22 -pix_fmt yuv420p"
+            fi
+
+            # Determine Audio Flag (Copy vs Transcode)
+            if [ "$A_CODEC" = "aac" ]; then
+                A_FLAG="-c:a copy"
+            else
+                echo "Non-standard audio codec detected. Re-encoding to AAC..."
+                A_FLAG="-c:a aac -b:a 128k"
+            fi
+
+            # 4. Generate universal web-playable HLS Chunks
+            ffmpeg -i "input_temp_file" \
+              $V_FLAG $A_FLAG \
+              -start_number 0 \
+              -hls_time 4 \
+              -hls_list_size 0 \
+              -f hls "$folder_name/index.m3u8"
+
+            # Renaming chunks to include movie title prefix so files don't collide
+            cd "$folder_name"
+            for file in index*.ts; do
+              if [ -f "$file" ]; then
+                mv "$file" "${folder_name}_${file}"
+              fi
+            done
+            # Update index.m3u8 references to match renamed chunks
+            sed -i "s/index/${folder_name}_index/g" index.m3u8
+            cd ..
+
+            # 5. Upload chunks and playlist to GitHub Release (v1.0.0)
+            echo "Uploading assets to GitHub Release..."
+            gh release upload v1.0.0 $folder_name/* --clobber
+
+            # 6. Cleanup local runner storage to avoid disk full errors
+            rm -rf input_temp_file "$folder_name"
+            echo "Finished processing $filename cleanly."
+
           done < urls.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
