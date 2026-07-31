@@ -14,9 +14,9 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl zip
+          sudo apt-get install -y ffmpeg curl
 
-      - name: Download, Transcode to HLS, Zip, and Upload Assets
+      - name: Download, Transcode to HLS, and Upload Assets
         run: |
           if [ ! -f urls.txt ]; then
             echo "Error: urls.txt file not found!"
@@ -72,11 +72,11 @@ jobs:
                 A_FLAG="-c:a aac -b:a 128k"
             fi
 
-            # Generate HLS playlist and chunks
+            # Slice into 6-second HLS chunks to reduce total chunk count
             ffmpeg -i "input_temp_file" \
               $V_FLAG $A_FLAG \
               -start_number 0 \
-              -hls_time 4 \
+              -hls_time 6 \
               -hls_list_size 0 \
               -f hls "$folder_name/index.m3u8"
 
@@ -89,16 +89,12 @@ jobs:
             sed -i "s/index/${folder_name}_index/g" index.m3u8
             cd ..
 
-            # Zip the folder for instant upload
-            echo "Zipping HLS stream assets..."
-            zip -r "${folder_name}.zip" "$folder_name"
+            echo "Uploading stream assets to GitHub Release..."
+            # Upload folder contents in a single command pass
+            gh release upload v1.0.0 $folder_name/* --clobber
 
-            # Upload single zip archive to GitHub Release
-            echo "Uploading ${folder_name}.zip to GitHub Release..."
-            gh release upload v1.0.0 "${folder_name}.zip" --clobber
-
-            # Cleanup
-            rm -rf input_temp_file "$folder_name" "${folder_name}.zip"
+            # Cleanup runner disk
+            rm -rf input_temp_file "$folder_name"
             echo "Finished processing $filename cleanly."
 
           done < urls.txt
