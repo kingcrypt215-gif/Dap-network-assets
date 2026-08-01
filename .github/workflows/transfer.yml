@@ -1,64 +1,147 @@
-name: Process and Upload Media Assets
+name: Convert Show Seasons to HLS and Release
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'urls.txt'
 
 jobs:
-  build-and-upload:
+  process-shows:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg curl
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
 
-      - name: Download, Transcode to HLS, and Create Dedicated Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          while IFS='|' read -r url output_name; do
-            url=$(echo "$url" | xargs)
-            output_name=$(echo "$output_name" | xargs)
+    - name: Install FFmpeg
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+
+    - name: Process Show Archives & Organize Seasons
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        python3 - << 'EOF'
+        import os
+        import subprocess
+        import urllib.request
+        import json
+        import re
+        import time
+
+        if not os.path.exists('urls.txt'):
+            print("No urls.txt found.")
+            exit(0)
+
+        with open('urls.txt', 'r') as f:
+            lines = f.readlines()
+
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
             
-            if [ -z "$url" ]; then
-              continue
-            fi
+            parts = line.split('|')
+            raw_url = parts[0].strip()
+            show_tag = parts[1].strip() if len(parts) > 1 else "tv_show_release"
+            show_tag = re.sub(r'[^a-zA-Z0-9_\-]', '_', show_tag).lower()
 
-            echo "================================================="
-            echo "Processing File: $output_name"
-            echo "URL: $url"
-            echo "================================================="
+            print(f"\n--- Processing Show: {raw_url} (Tag: {show_tag}) ---")
 
-            curl -L -o input_temp.mp4 "$url"
+            if "archive.org" in raw_url:
+                match = re.search(r'archive\.org/(?:details|download)/([^/]+)', raw_url)
+                if match:
+                    archive_id = match.group(1)
+                    print(f"Fetching metadata for Internet Archive ID: {archive_id}")
+                    
+                    try:
+                        api_url = f"https://archive.org/metadata/{archive_id}"
+                        req = urllib.request.urlopen(api_url)
+                        data = json.loads(req.read().decode('utf-8'))
+                        
+                        video_files = [
+                            f['name'] for f in data.get('files', []) 
+                            if f['name'].lower().endswith(('.mp4', '.mkv', '.avi'))
+                        ]
+                        
+                        if not video_files:
+                            print("No video files found via API.")
+                            continue
 
-            if [ ! -f input_temp.mp4 ] || [ ! -s input_temp.mp4 ]; then
-              echo "Error: Download failed or empty file."
-              exit 1
-            fi
+                        # Create master output directory for this show
+                        show_dir = f"output_{show_tag}"
+                        os.makedirs(show_dir, exist_ok=True)
 
-            base_name="${output_name%.*}"
-            mkdir -p "$base_name"
+                        for file_name in sorted(video_files):
+                            ep_url = f"https://archive.org/download/{archive_id}/{file_name}"
+                            
+                            # Auto-detect Season and Episode from filename (e.g., s01e01, season 1 episode 2)
+                            s_match = re.search(r's0?(\d+)', file_name, re.IGNORECASE)
+                            e_match = re.search(r'e0?(\d+)', file_name, re.IGNORECASE)
+                            
+                            season_num = s_match.group(1) if s_match else "1"
+                            episode_num = e_match.group(1) if e_match else "1"
+                            
+                            # Fallback if standard s01e01 isn't in filename: just parse sequential index
+                            season_folder = f"season_{int(season_num):02d}"
+                            episode_folder = f"ep_{int(episode_num):02d}"
+                            
+                            ep_out_dir = os.path.join(show_dir, season_folder, episode_folder)
+                            os.makedirs(ep_out_dir, exist_ok=True)
 
-            ffmpeg -i input_temp.mp4 -codec:v libx264 -codec:a aac -hls_time 10 -hls_playlist_type vod -hls_segment_filename "$base_name/index_%03d.ts" "$base_name/index.m3u8"
+                            print(f"\nDownloading Episode: {file_name} -> Season {season_num}, Episode {episode_num}")
+                            input_file = "source_episode.mp4"
+                            subprocess.run(["curl", "-L", "-o", input_file, ep_url], check=True)
 
-            TAG_NAME="${base_name}_release"
-            echo "Creating GitHub Release Tag: $TAG_NAME..."
-            
-            gh release create "$TAG_NAME" --title "Release: $base_name" --notes "Automated HLS transcode release for $base_name" || true
+                            print("Converting to HLS segments...")
+                            ffmpeg_cmd = [
+                                "ffmpeg", "-i", input_file,
+                                "-codec:v", "libx264", "-codec:a", "aac",
+                                "-hls_time", "6", "-hls_playlist_type", "vod",
+                                "-hls_segment_filename", f"{ep_out_dir}/segment_%03d.ts",
+                                f"{ep_out_dir}/index.m3u8"
+                            ]
+                            subprocess.run(ffmpeg_cmd, check=True)
 
-            echo "Uploading playlist file..."
-            gh release upload "$TAG_NAME" "$base_name/index.m3u8" --clobber
-            sleep 1
+                            print("Pausing 2 seconds for stability...")
+                            time.sleep(2)
 
-            echo "Uploading video segments in safe batches..."
-            for file in "$base_name"/*.ts; do
-              gh release upload "$TAG_NAME" "$file" --clobber
-              sleep 2
-            done
+                            if os.path.exists(input_file):
+                                os.remove(input_file)
 
-            rm -f input_temp.mp4
+                        # Package and upload everything into ONE single GitHub Release
+                        print(f"\nPublishing master release for: {show_tag}")
+                        subprocess.run(["git", "config", "--global", "user.name", "github-actions[bot]"], check=True)
+                        subprocess.run(["git", "config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
+                        subprocess.run(["git", "tag", "-d", show_tag], stderr=subprocess.DEVNULL)
 
-          done < urls.txt
+                        # We zip or tar the directory structure to safely upload nested folders to GitHub releases
+                        archive_filename = f"{show_tag}_bundle.zip"
+                        subprocess.run(["zip", "-r", archive_filename, show_dir], check=True)
+
+                        # Create release
+                        release_cmd = [
+                            "gh", "release", "create", show_tag,
+                            archive_filename,
+                            "--title", f"Show Release: {show_tag}",
+                            "--notes", f"Structured multi-season HLS package for {show_tag}"
+                        ]
+                        
+                        result = subprocess.run(release_cmd)
+                        if result.returncode != 0:
+                            subprocess.run(["gh", "release", "upload", show_tag, archive_filename, "--clobber"])
+
+                        print(f"Successfully packaged and released {show_tag} with full season/episode hierarchy!")
+
+                    except Exception as e:
+                        print(f"Error processing show archive: {e}")
+        EOF
