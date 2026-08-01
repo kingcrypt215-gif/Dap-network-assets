@@ -1,7 +1,4 @@
-import os
 
-# List of URLs and destination filenames
-downloads = [
     ("https://archive.org/download/TheConspiracyMovie/THE%20CONSPIRACY%20%282012%29.mp4", "the_conspiracy_2012"),
     ("https://archive.org/download/cyber-tracker-1994-full-movie/Cyber%20Tracker%201994%20Full%20Movie.mp4", "cyber_tracker_1994"),
     ("https://archive.org/download/take-away-2003-full-movie/Take%20Away%202003%20-%20Full%20Movie.mp4", "take_away_2003"),
