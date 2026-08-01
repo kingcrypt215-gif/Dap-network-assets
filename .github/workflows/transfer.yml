@@ -25,10 +25,7 @@ def get_archive_files_from_url(url):
     If it's an archive item, queries the metadata API to find all video files 
     associated with that item. Returns a list of (file_url, file_name) tuples.
     """
-    # Example archive URL pattern: https://archive.org/download/identifier/filename.mp4
-    # or https://archive.org/details/identifier
     if "archive.org" not in url:
-        # Not an archive link, just return the single file
         return [(url, None)]
 
     parts = url.split('/')
@@ -44,7 +41,6 @@ def get_archive_files_from_url(url):
     except (ValueError, IndexError):
         return [(url, None)]
 
-    # Query Internet Archive Metadata API
     metadata_url = f"https://archive.org/metadata/{identifier}"
     print(f"Querying Internet Archive metadata for identifier: {identifier}...")
     
@@ -58,7 +54,6 @@ def get_archive_files_from_url(url):
         
         for f in files:
             name = f.get("name", "")
-            # Filter for video formats typically processed
             if name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
                 file_url = f"https://archive.org/download/{identifier}/{name}"
                 video_files.append((file_url, name))
@@ -70,7 +65,6 @@ def get_archive_files_from_url(url):
     except Exception as e:
         print(f"Warning: Could not fetch metadata API for {identifier}: {e}")
 
-    # Fallback to the original single URL if metadata lookup fails
     return [(url, None)]
 
 def download_file(url, output_filename):
@@ -119,15 +113,14 @@ def upload_to_github_release(slug, output_dir):
         os.remove(archive_name)
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python process.py <urls_file>")
-        sys.exit(1)
-
-    urls_file = sys.argv[1]
+    # Automatically target urls.txt by default (or accept a command-line argument if provided)
+    urls_file = sys.argv[1] if len(sys.argv) > 1 else "urls.txt"
+    
     if not os.path.exists(urls_file):
         print(f"Error: File {urls_file} not found.")
         sys.exit(1)
 
+    print(f"Reading links from: {urls_file}")
     with open(urls_file, 'r') as f:
         lines = f.readlines()
 
@@ -136,11 +129,9 @@ def main():
         if not url or not base_slug:
             continue
 
-        # Check if the URL points to an archive item containing multiple episodes/files
         target_files = get_archive_files_from_url(url)
 
         for file_url, archive_filename in target_files:
-            # Determine unique slug per file if multiple episodes are discovered
             if archive_filename and len(target_files) > 1:
                 clean_name = os.path.splitext(os.path.basename(archive_filename))[0]
                 slug = f"{base_slug}_{clean_name}"
@@ -150,7 +141,6 @@ def main():
             output_dir = os.path.join("output", slug)
             playlist_path = os.path.join(output_dir, "playlist.m3u8")
 
-            # Resume logic: skip if already processed locally
             if os.path.exists(playlist_path):
                 print(f"Skipping '{slug}': Already processed locally (found {playlist_path}).")
                 continue
