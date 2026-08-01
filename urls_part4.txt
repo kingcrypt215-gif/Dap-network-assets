@@ -1,1 +1,10 @@
 
+https://archive.org/download/robocop-1987_202311/Robocop%201987.mp4 | robocop_1987
+https://archive.org/download/robocop-1987_202311/Robocop%202.mp4 | robocop_2
+https://archive.org/download/robocop-1987_202311/Robocop%203.mp4 | robocop_3
+https://archive.org/download/robocop-1987_202311/Robocop%202014.mp4 | robocop_2014
+https://archive.org/download/TheConspiracyMovie/THE%20CONSPIRACY%20%282012%29.mp4 | the_conspiracy_2012
+https://archive.org/download/cyber-tracker-1994-full-movie/Cyber%20Tracker%201994%20Full%20Movie.mp4 | cyber_tracker_1994
+https://archive.org/download/take-away-2003-full-movie/Take%20Away%202003%20-%20Full%20Movie.mp4 | take_away_2003
+https://archive.org/download/pollyanna-2003-full-movie/Pollyanna%202003%20%28Full%20Movie%29.mp4 | pollyanna_2003
+https://archive.org/download/KillListMovie/KILL%20LIST%20%282011%29%201080p.mp4 | kill_list_2011
