@@ -15,11 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        file: [
-          urls_part1.txt, urls_part2.txt, urls_part3.txt, urls_part4.txt, urls_part5.txt,
-          urls_part6.txt, urls_part7.txt, urls_part8.txt, urls_part9.txt, urls_part10.txt,
-          urls_part11.txt, urls_part12.txt, urls_part13.txt, urls_part14.txt, urls_part15.txt
-        ]
+        file: [urls_part1.txt, urls_part2.txt, urls_part3.txt]
 
     steps:
     - name: Checkout Repository
