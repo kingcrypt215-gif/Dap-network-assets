@@ -76,4 +76,3 @@
 ("https://archive.org/download/day-the-earth-stood-still-1951/Day%20the%20Earth%20Stood%20Still%201951.mp4", "day_the_earth_stood_still_1951")
 ("https://archive.org/download/breadcrumbs-2011-dvd-rip/Breadcrumbs%202011%20DvdRip.mp4", "breadcrumbs_2011")
 ("https://archive.org/download/jackie-chan-adventures-1080p-ai-upscale/Season%201%20%282000-01%29/Jackie%20Chan%20Adventures%20-%201x01%20-%20The%20Dark%20Hand.mp4", "jackie_chan_adventures")
-
