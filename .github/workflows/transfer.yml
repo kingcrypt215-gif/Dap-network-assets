@@ -1,16 +1,21 @@
-name: Convert Show Seasons to HLS and Release
+name: Convert Media to HLS Matrix
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'urls.txt'
+      - 'urls_part*.txt'
 
 jobs:
-  process-shows:
+  process-batch:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        file: [urls_part1.txt, urls_part2.txt, urls_part3.txt]
 
     steps:
     - name: Checkout Repository
@@ -26,9 +31,10 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y ffmpeg
 
-    - name: Process Show Archives & Organize Seasons
+    - name: Process Assigned URL Batch
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TARGET_FILE: ${{ matrix.file }}
       run: |
         python3 - << 'EOF'
         import os
@@ -38,11 +44,16 @@ jobs:
         import re
         import time
 
-        if not os.path.exists('urls.txt'):
-            print("No urls.txt found.")
+        target_file = os.environ.get("TARGET_FILE")
+        if not os.path.exists(target_file):
+            print(f"Target file {target_file} not found.")
             exit(0)
 
-        with open('urls.txt', 'r') as f:
+        # Configure git identity early
+        subprocess.run(["git", "config", "--global", "user.name", "github-actions[bot]"], check=True)
+        subprocess.run(["git", "config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
+
+        with open(target_file, 'r') as f:
             lines = f.readlines()
 
         for line in lines:
@@ -52,10 +63,19 @@ jobs:
             
             parts = line.split('|')
             raw_url = parts[0].strip()
-            show_tag = parts[1].strip() if len(parts) > 1 else "tv_show_release"
+            show_tag = parts[1].strip() if len(parts) > 1 else "media_release"
             show_tag = re.sub(r'[^a-zA-Z0-9_\-]', '_', show_tag).lower()
 
-            print(f"\n--- Processing Show: {raw_url} (Tag: {show_tag}) ---")
+            show_dir = f"output_{show_tag}"
+            archive_filename = f"{show_tag}_bundle.zip"
+
+            # 1. RESUME CHECK: Skip if GitHub Release already exists or local files exist
+            release_check = subprocess.run(["gh", "release", "view", show_tag], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if release_check.returncode == 0 or (os.path.exists(show_dir) and os.path.exists(archive_filename)):
+                print(f"\n[SKIP] Already processed and released: {show_tag}")
+                continue
+
+            print(f"\n--- Processing Media: {raw_url} (Tag: {show_tag}) ---")
 
             if "archive.org" in raw_url:
                 match = re.search(r'archive\.org/(?:details|download)/([^/]+)', raw_url)
@@ -77,71 +97,91 @@ jobs:
                             print("No video files found via API.")
                             continue
 
-                        # Create master output directory for this show
-                        show_dir = f"output_{show_tag}"
                         os.makedirs(show_dir, exist_ok=True)
 
-                        for file_name in sorted(video_files):
-                            ep_url = f"https://archive.org/download/{archive_id}/{file_name}"
-                            
-                            # Auto-detect Season and Episode from filename (e.g., s01e01, season 1 episode 2)
-                            s_match = re.search(r's0?(\d+)', file_name, re.IGNORECASE)
-                            e_match = re.search(r'e0?(\d+)', file_name, re.IGNORECASE)
-                            
-                            season_num = s_match.group(1) if s_match else "1"
-                            episode_num = e_match.group(1) if e_match else "1"
-                            
-                            # Fallback if standard s01e01 isn't in filename: just parse sequential index
-                            season_folder = f"season_{int(season_num):02d}"
-                            episode_folder = f"ep_{int(episode_num):02d}"
-                            
-                            ep_out_dir = os.path.join(show_dir, season_folder, episode_folder)
-                            os.makedirs(ep_out_dir, exist_ok=True)
+                        # Determine if this is a single Movie or a TV Show based on file count / naming
+                        is_single_movie = len(video_files) == 1 and not any(re.search(r's0?\d+', f, re.IGNORECASE) for f in video_files)
 
-                            print(f"\nDownloading Episode: {file_name} -> Season {season_num}, Episode {episode_num}")
-                            input_file = "source_episode.mp4"
+                        if is_single_movie:
+                            file_name = video_files[0]
+                            ep_url = f"https://archive.org/download/{archive_id}/{file_name}"
+                            print(f"\nProcessing as Standalone Movie: {file_name}")
+                            
+                            input_file = "source_media.mp4"
                             subprocess.run(["curl", "-L", "-o", input_file, ep_url], check=True)
 
-                            print("Converting to HLS segments...")
+                            print("Converting movie to HLS segments...")
                             ffmpeg_cmd = [
                                 "ffmpeg", "-i", input_file,
                                 "-codec:v", "libx264", "-codec:a", "aac",
                                 "-hls_time", "6", "-hls_playlist_type", "vod",
-                                "-hls_segment_filename", f"{ep_out_dir}/segment_%03d.ts",
-                                f"{ep_out_dir}/index.m3u8"
+                                "-hls_segment_filename", f"{show_dir}/segment_%03d.ts",
+                                f"{show_dir}/index.m3u8"
                             ]
                             subprocess.run(ffmpeg_cmd, check=True)
 
-                            print("Pausing 2 seconds for stability...")
-                            time.sleep(2)
-
                             if os.path.exists(input_file):
                                 os.remove(input_file)
+                        else:
+                            # Multi-episode TV Show Layout
+                            for file_name in sorted(video_files):
+                                ep_url = f"https://archive.org/download/{archive_id}/{file_name}"
+                                
+                                s_match = re.search(r's0?(\d+)', file_name, re.IGNORECASE)
+                                e_match = re.search(r'e0?(\d+)', file_name, re.IGNORECASE)
+                                
+                                season_num = s_match.group(1) if s_match else "1"
+                                episode_num = e_match.group(1) if e_match else "1"
+                                
+                                season_folder = f"season_{int(season_num):02d}"
+                                episode_folder = f"ep_{int(episode_num):02d}"
+                                
+                                ep_out_dir = os.path.join(show_dir, season_folder, episode_folder)
+                                os.makedirs(ep_out_dir, exist_ok=True)
 
-                        # Package and upload everything into ONE single GitHub Release
+                                print(f"\nDownloading Episode: {file_name} -> Season {season_num}, Episode {episode_num}")
+                                input_file = "source_episode.mp4"
+                                subprocess.run(["curl", "-L", "-o", input_file, ep_url], check=True)
+
+                                print("Converting to HLS segments...")
+                                ffmpeg_cmd = [
+                                    "ffmpeg", "-i", input_file,
+                                    "-codec:v", "libx264", "-codec:a", "aac",
+                                    "-hls_time", "6", "-hls_playlist_type", "vod",
+                                    "-hls_segment_filename", f"{ep_out_dir}/segment_%03d.ts",
+                                    f"{ep_out_dir}/index.m3u8"
+                                ]
+                                subprocess.run(ffmpeg_cmd, check=True)
+
+                                time.sleep(2)
+                                if os.path.exists(input_file):
+                                    os.remove(input_file)
+
+                        # Package release
                         print(f"\nPublishing master release for: {show_tag}")
-                        subprocess.run(["git", "config", "--global", "user.name", "github-actions[bot]"], check=True)
-                        subprocess.run(["git", "config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
                         subprocess.run(["git", "tag", "-d", show_tag], stderr=subprocess.DEVNULL)
-
-                        # We zip or tar the directory structure to safely upload nested folders to GitHub releases
-                        archive_filename = f"{show_tag}_bundle.zip"
                         subprocess.run(["zip", "-r", archive_filename, show_dir], check=True)
 
-                        # Create release
                         release_cmd = [
                             "gh", "release", "create", show_tag,
                             archive_filename,
-                            "--title", f"Show Release: {show_tag}",
-                            "--notes", f"Structured multi-season HLS package for {show_tag}"
+                            "--title", f"Release: {show_tag}",
+                            "--notes", f"HLS package for {show_tag}"
                         ]
                         
                         result = subprocess.run(release_cmd)
                         if result.returncode != 0:
                             subprocess.run(["gh", "release", "upload", show_tag, archive_filename, "--clobber"])
 
-                        print(f"Successfully packaged and released {show_tag} with full season/episode hierarchy!")
+                        # Commit and push progress safely with rebase for concurrent jobs
+                        print(f"Committing progress for {show_tag} to repository...")
+                        subprocess.run(["git", "add", show_dir, archive_filename], check=True)
+                        subprocess.run(["git", "commit", "-m", f"Add processed HLS output and bundle for {show_tag}"], check=True)
+                        subprocess.run(["git", "pull", "--rebase"], check=True)
+                        subprocess.run(["git", "push"], check=True)
+
+                        print(f"Successfully packaged, released, and committed {show_tag}!")
 
                     except Exception as e:
-                        print(f"Error processing show archive: {e}")
+                        print(f"Error processing media archive: {e}")
         EOF
